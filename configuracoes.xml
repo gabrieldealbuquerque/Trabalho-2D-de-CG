@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jogo>
+  <arena altura="800" largura="600"/>
+  <jogador raioCabeca="18" velocidade="180" velocidadeGiro="150" velocidadeTiro="480" tirosPorSegundo="6"/>
+  <inimigo raioCabeca="15" tirosPorSegundo="0.7" velocidadeTiro="190"/>
+  <barril altura="64" largura="76" numeroTiros="3" nParaGanhar="10" velocidade="65"/>
+  <outros intervaloBarris="2.1" sensibilidadeMouse="0.25"/>
+</jogo>
