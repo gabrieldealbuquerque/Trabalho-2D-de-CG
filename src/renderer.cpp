@@ -9,20 +9,28 @@
 
 namespace cg {
 namespace {
-struct Color { float r, g, b; };
+struct Color {
+    float r, g, b;
+};
 constexpr Color ink{0.055f, 0.10f, 0.16f};
 constexpr Color white{0.91f, 0.96f, 0.98f};
 constexpr Color muted{0.53f, 0.73f, 0.82f};
 constexpr Color green{0.40f, 0.83f, 0.38f};
 constexpr Color purple{0.72f, 0.41f, 0.91f};
-void color(Color c) { glColor3f(c.r, c.g, c.b); }
+void color(Color c) {
+    glColor3f(c.r, c.g, c.b);
+}
+
 void rect(double x, double y, double w, double h, Color c) {
     color(c);
     glBegin(GL_QUADS);
-    glVertex2d(x, y); glVertex2d(x + w, y);
-    glVertex2d(x + w, y + h); glVertex2d(x, y + h);
+    glVertex2d(x, y);
+    glVertex2d(x + w, y);
+    glVertex2d(x + w, y + h);
+    glVertex2d(x, y + h);
     glEnd();
 }
+
 void disk(double x, double y, double radius, Color c, bool outline = false) {
     color(c);
     glBegin(outline ? GL_LINE_LOOP : GL_TRIANGLE_FAN);
@@ -33,6 +41,7 @@ void disk(double x, double y, double radius, Color c, bool outline = false) {
     }
     glEnd();
 }
+
 std::array<unsigned char, 7> glyph(char ch) {
     switch (std::toupper(static_cast<unsigned char>(ch))) {
     case 'A': return {14,17,17,31,17,17,17};
@@ -82,7 +91,10 @@ std::array<unsigned char, 7> glyph(char ch) {
     default: return {};
     }
 }
-double textWidth(const std::string& text, double scale) { return text.size() * 6 * scale; }
+double textWidth(const std::string& text, double scale) {
+    return text.size() * 6 * scale;
+}
+
 void text(const std::string& value, double x, double y, double scale, Color c) {
     color(c);
     glBegin(GL_QUADS);
@@ -91,18 +103,23 @@ void text(const std::string& value, double x, double y, double scale, Color c) {
         for (int row = 0; row < 7; ++row) {
             for (int col = 0; col < 5; ++col) {
                 if (!(rows[row] & (1 << (4 - col)))) continue;
-                const double left = x + col * scale, bottom = y + (6 - row) * scale;
-                glVertex2d(left, bottom); glVertex2d(left + scale, bottom);
-                glVertex2d(left + scale, bottom + scale); glVertex2d(left, bottom + scale);
+                const double left = x + col * scale;
+                const double bottom = y + (6 - row) * scale;
+                glVertex2d(left, bottom);
+                glVertex2d(left + scale, bottom);
+                glVertex2d(left + scale, bottom + scale);
+                glVertex2d(left, bottom + scale);
             }
         }
         x += 6 * scale;
     }
     glEnd();
 }
+
 void centered(const std::string& value, double x, double y, double scale, Color c) {
     text(value, x - textWidth(value, scale) / 2, y, scale, c);
 }
+
 void outlineRect(const Rect& r, Color c) {
     color(c);
     glBegin(GL_LINE_LOOP);
@@ -131,7 +148,12 @@ void Renderer::character(const Character& c, bool enemy, EnemyKind kind) const {
     rect(0.35, -1.40 - stride, 0.5, 1.65, black);
     const bool spread = enemy && kind == EnemyKind::SpreadGunner;
     const bool cannon = enemy && kind == EnemyKind::Cannoneer;
-    const Color uniform = spread ? Color{0.93f,0.43f,0.25f} : cannon ? Color{0.34f,0.65f,0.83f} : purple;
+    Color uniform = purple;
+    if (spread) {
+        uniform = {0.93f,0.43f,0.25f};
+    } else if (cannon) {
+        uniform = {0.34f,0.65f,0.83f};
+    }
     disk(0, 0, 1, enemy ? uniform : green);
     disk(0, 0, 1, ink, true);
     disk(-0.27, 0.30, 0.18, enemy ? Color{0.85f,0.64f,0.97f} : Color{0.67f,0.95f,0.55f});
@@ -161,11 +183,20 @@ void Renderer::character(const Character& c, bool enemy, EnemyKind kind) const {
 void Renderer::barrel(const Barrel& b) const {
     const double left = b.position.x - b.width / 2;
     const double bottom = b.position.y - b.height / 2;
-    const Color body = b.kind == BarrelKind::Normal ? Color{0.91f,0.46f,0.12f} :
-        b.kind == BarrelKind::Miniboss ? Color{0.67f,0.28f,0.09f} : Color{0.56f,0.10f,0.18f};
-    const Color metal = b.isBoss() ? Color{0.85f,0.66f,0.27f} :
-        b.enemyKind == EnemyKind::SpreadGunner ? Color{0.64f,0.23f,0.19f} :
-        b.enemyKind == EnemyKind::Cannoneer ? Color{0.22f,0.42f,0.55f} : Color{0.27f,0.21f,0.18f};
+    Color body{0.91f,0.46f,0.12f};
+    if (b.kind == BarrelKind::Miniboss) {
+        body = {0.67f,0.28f,0.09f};
+    } else if (b.kind == BarrelKind::FinalBoss) {
+        body = {0.56f,0.10f,0.18f};
+    }
+    Color metal{0.27f,0.21f,0.18f};
+    if (b.isBoss()) {
+        metal = {0.85f,0.66f,0.27f};
+    } else if (b.enemyKind == EnemyKind::SpreadGunner) {
+        metal = {0.64f,0.23f,0.19f};
+    } else if (b.enemyKind == EnemyKind::Cannoneer) {
+        metal = {0.22f,0.42f,0.55f};
+    }
     rect(left, bottom, b.width, b.height, body);
     for (int i = 0; i < 5; ++i) {
         const double y = std::fmod(i / 5.0 + b.rollPhase, 1.0) * b.height;
@@ -183,72 +214,96 @@ void Renderer::barrel(const Barrel& b) const {
                 disk(left + b.width * x, bottom + b.height * y, std::min(b.width, b.height) * 0.035, metal);
     }
     if (b.isBoss()) {
-        const bool final = b.kind == BarrelKind::FinalBoss;
-        const double faceWidth = b.width * 0.32, faceHeight = b.height * 0.54;
-        const double faceX = b.position.x - faceWidth / 2, faceY = b.position.y - faceHeight * 0.38;
-        const Color brass{0.96f,0.75f,0.30f}, bone{0.90f,0.86f,0.68f};
-        rect(faceX - 3, faceY - 3, faceWidth + 6, faceHeight + 6, ink);
-        rect(faceX, faceY, faceWidth, faceHeight, final ? bone : brass);
-        rect(faceX + faceWidth * 0.12, faceY + faceHeight * 0.86,
-             faceWidth * 0.76, faceHeight * 0.20, final ? bone : brass);
-        color(b.enraged() ? Color{1.0f,0.31f,0.22f} : metal);
-        glBegin(GL_TRIANGLES);
-        for (int i = -1; i <= 1; ++i) {
-            const double x = b.position.x + i * faceWidth * 0.28;
-            glVertex2d(x - faceWidth * 0.16, faceY + faceHeight);
-            glVertex2d(x + faceWidth * 0.16, faceY + faceHeight);
-            glVertex2d(x, faceY + faceHeight * (i == 0 ? 1.30 : 1.22));
-        }
-        glEnd();
-        const Color eyes = b.enraged() ? Color{1,0.12f,0.08f} : ink;
-        for (double side : {0.15, 0.65}) {
-            rect(faceX + faceWidth * side, faceY + faceHeight * 0.47,
-                 faceWidth * 0.20, faceHeight * 0.23, eyes);
-            if (final)
-                rect(faceX + faceWidth * (side + 0.06), faceY + faceHeight * 0.51,
-                     faceWidth * 0.07, faceHeight * 0.10, {1,0.25f,0.20f});
-        }
-        rect(faceX + faceWidth * 0.24, faceY + faceHeight * 0.12, faceWidth * 0.52, faceHeight * 0.13, ink);
-        if (final) {
-            rect(faceX + faceWidth * 0.44, faceY + faceHeight * 0.29, faceWidth * 0.12, faceHeight * 0.13, ink);
-            for (int i = 0; i < 3; ++i)
-                rect(faceX + faceWidth * (0.3 + 0.15 * i), faceY + faceHeight * 0.12,
-                     faceWidth * 0.06, faceHeight * 0.09, bone);
-        }
-        for (double side : {-1.0, 1.0}) {
-            const Vec2 muzzle = b.bossMuzzle(side);
-            rect(muzzle.x - b.width * 0.085, muzzle.y - 2, b.width * 0.17, b.height * 0.52, ink);
-            rect(muzzle.x - b.width * 0.06, muzzle.y + 2, b.width * 0.12, b.height * 0.48, {0.30f,0.34f,0.39f});
-            rect(muzzle.x - b.width * 0.035, muzzle.y + 5, b.width * 0.03, b.height * 0.38, {0.58f,0.62f,0.65f});
-            if (b.telegraph > 0) {
-                disk(muzzle.x, muzzle.y + 4, 3 + b.enemy.radius * 0.35 * b.telegraph, {1,0.66f,0.15f});
-                disk(muzzle.x, muzzle.y + 4, 1 + b.enemy.radius * 0.14 * b.telegraph, white);
-            }
-        }
-        if (b.telegraph > 0) {
-            const double radius = std::min(b.width, b.height) * (0.58 + 0.10 * b.telegraph);
-            disk(b.position.x, b.position.y, radius, {1,0.68f,0.24f}, true);
-        }
+        bossDetails(b);
     } else if (b.hasEnemy) {
-        if (b.enemyKind == EnemyKind::Cannoneer) {
-            for (int i = 0; i < 8; ++i) {
-                const Vec2 direction = forward(i * 45.0 + b.attackIndex * 22.5);
-                const Vec2 port = b.position + Vec2{direction.x * b.width * 0.40, direction.y * b.height * 0.40};
-                const double radius = std::min(b.width, b.height) * 0.055;
-                disk(port.x, port.y, radius, ink);
-                disk(port.x, port.y, radius * 0.55,
-                     b.telegraph > 0 ? Color{1,0.66f,0.15f} : Color{0.52f,0.65f,0.73f});
-            }
-        }
-        character(b.enemy, true, b.enemyKind);
-        if (b.telegraph > 0) {
-            const Vec2 muzzle = b.enemy.muzzle();
-            disk(muzzle.x, muzzle.y, b.enemy.radius * (0.15 + 0.25 * b.telegraph), {1,0.66f,0.15f});
+        barrelEnemy(b);
+    }
+    barrelHealth(b);
+}
+
+void Renderer::bossDetails(const Barrel& b) const {
+    const Color metal{0.85f,0.66f,0.27f};
+    const bool final = b.kind == BarrelKind::FinalBoss;
+    const double faceWidth = b.width * 0.32;
+    const double faceHeight = b.height * 0.54;
+    const double faceX = b.position.x - faceWidth / 2;
+    const double faceY = b.position.y - faceHeight * 0.38;
+    const Color brass{0.96f,0.75f,0.30f};
+    const Color bone{0.90f,0.86f,0.68f};
+    rect(faceX - 3, faceY - 3, faceWidth + 6, faceHeight + 6, ink);
+    rect(faceX, faceY, faceWidth, faceHeight, final ? bone : brass);
+    rect(faceX + faceWidth * 0.12, faceY + faceHeight * 0.86,
+         faceWidth * 0.76, faceHeight * 0.20, final ? bone : brass);
+    color(b.enraged() ? Color{1.0f,0.31f,0.22f} : metal);
+    glBegin(GL_TRIANGLES);
+    for (int i = -1; i <= 1; ++i) {
+        const double x = b.position.x + i * faceWidth * 0.28;
+        glVertex2d(x - faceWidth * 0.16, faceY + faceHeight);
+        glVertex2d(x + faceWidth * 0.16, faceY + faceHeight);
+        glVertex2d(x, faceY + faceHeight * (i == 0 ? 1.30 : 1.22));
+    }
+    glEnd();
+    const Color eyes = b.enraged() ? Color{1,0.12f,0.08f} : ink;
+    for (double side : {0.15, 0.65}) {
+        rect(faceX + faceWidth * side, faceY + faceHeight * 0.47,
+             faceWidth * 0.20, faceHeight * 0.23, eyes);
+        if (final) {
+            rect(faceX + faceWidth * (side + 0.06), faceY + faceHeight * 0.51,
+                 faceWidth * 0.07, faceHeight * 0.10, {1,0.25f,0.20f});
         }
     }
+    rect(faceX + faceWidth * 0.24, faceY + faceHeight * 0.12, faceWidth * 0.52, faceHeight * 0.13, ink);
+    if (final) {
+        rect(faceX + faceWidth * 0.44, faceY + faceHeight * 0.29, faceWidth * 0.12, faceHeight * 0.13, ink);
+        for (int i = 0; i < 3; ++i) {
+            rect(faceX + faceWidth * (0.3 + 0.15 * i), faceY + faceHeight * 0.12,
+                 faceWidth * 0.06, faceHeight * 0.09, bone);
+        }
+    }
+    for (double side : {-1.0, 1.0}) {
+        const Vec2 muzzle = b.bossMuzzle(side);
+        rect(muzzle.x - b.width * 0.085, muzzle.y - 2, b.width * 0.17, b.height * 0.52, ink);
+        rect(muzzle.x - b.width * 0.06, muzzle.y + 2, b.width * 0.12, b.height * 0.48, {0.30f,0.34f,0.39f});
+        rect(muzzle.x - b.width * 0.035, muzzle.y + 5, b.width * 0.03, b.height * 0.38, {0.58f,0.62f,0.65f});
+        if (b.telegraph > 0) {
+            disk(muzzle.x, muzzle.y + 4, 3 + b.enemy.radius * 0.35 * b.telegraph, {1,0.66f,0.15f});
+            disk(muzzle.x, muzzle.y + 4, 1 + b.enemy.radius * 0.14 * b.telegraph, white);
+        }
+    }
+    if (b.telegraph > 0) {
+        const double radius = std::min(b.width, b.height) * (0.58 + 0.10 * b.telegraph);
+        disk(b.position.x, b.position.y, radius, {1,0.68f,0.24f}, true);
+    }
+}
+
+void Renderer::barrelEnemy(const Barrel& b) const {
+    if (b.enemyKind == EnemyKind::Cannoneer) {
+        for (int i = 0; i < 8; ++i) {
+            const Vec2 direction = forward(i * 45.0 + b.attackIndex * 22.5);
+            const Vec2 port = b.position + Vec2{direction.x * b.width * 0.40, direction.y * b.height * 0.40};
+            const double radius = std::min(b.width, b.height) * 0.055;
+            disk(port.x, port.y, radius, ink);
+            disk(port.x, port.y, radius * 0.55,
+                 b.telegraph > 0 ? Color{1,0.66f,0.15f} : Color{0.52f,0.65f,0.73f});
+        }
+    }
+    character(b.enemy, true, b.enemyKind);
+    if (b.telegraph > 0) {
+        const Vec2 muzzle = b.enemy.muzzle();
+        disk(muzzle.x, muzzle.y, b.enemy.radius * (0.15 + 0.25 * b.telegraph), {1,0.66f,0.15f});
+    }
+}
+
+void Renderer::barrelHealth(const Barrel& b) const {
+    const double bottom = b.position.y - b.height / 2;
     const std::string hp = std::to_string(b.hitPoints);
     const double scale = std::min({b.hasEnemy ? 1.4 : 2.4, b.width / (hp.size() * 6 + 6), b.height / 12});
-    const double y = b.isBoss() ? bottom + 2 * scale : b.hasEnemy ? bottom + b.height - 10 * scale : b.position.y - 3.5 * scale;
+    double y = b.position.y - 3.5 * scale;
+    if (b.isBoss()) {
+        y = bottom + 2 * scale;
+    } else if (b.hasEnemy) {
+        y = bottom + b.height - 10 * scale;
+    }
     rect(b.position.x - (textWidth(hp, scale) + 4 * scale) / 2, y - scale,
          textWidth(hp, scale) + 4 * scale, 9 * scale, ink);
     centered(hp, b.position.x, y, scale, white);
@@ -271,8 +326,11 @@ void Renderer::hud(const Game& game) const {
          (boxWidth - 12) * game.stageDestroyed() / game.stageGoal(), 2.5 * scale, green);
     const double small = std::min(1.1, (c.arenaWidth - 10.0) / 174);
     double nextY = c.arenaHeight - 25 * scale - (compact ? 33 : 12);
-    const std::string progress = game.isBossStage() ? (game.stage() == 5 ? "MINIBOSS: BARAO DO TAMBOR" : "BOSS FINAL: REI DA POLVORA") :
-        "META DA FASE: " + std::to_string(game.stageDestroyed()) + " / " + std::to_string(game.stageGoal());
+    std::string progress = "META DA FASE: " + std::to_string(game.stageDestroyed()) + " / " +
+                           std::to_string(game.stageGoal());
+    if (game.isBossStage()) {
+        progress = game.stage() == Game::minibossStage ? "MINIBOSS: BARAO DO TAMBOR" : "BOSS FINAL: REI DA POLVORA";
+    }
     const double progressScale = std::min(1.15, (c.arenaWidth - 12.0) / (progress.size() * 6));
     text(progress, 6, nextY, progressScale, white);
     nextY -= 17;
@@ -314,7 +372,7 @@ void Renderer::overlay(const Game& game) const {
         rect((w - boxWidth) / 2, (h - boxHeight) / 2, boxWidth, boxHeight, ink);
         const double top = (h + boxHeight) / 2;
         centered("ATAQUE DE BARRIS", w / 2, top - 20 * scale, 1.7 * scale, green);
-        const std::vector<std::string> lines = {
+        static const std::array<std::string, 12> lines = {
             "W / S     ANDAR PARA FRENTE / TRAS", "A / D     GIRAR ESQUERDA / DIREITA",
             "MOUSE     GIRAR ARMA (-30 A +30 GRAUS)", "CLICAR    TIRO / SEGURAR: CONTINUO",
             "P         PAUSAR OU CONTINUAR", "R         REINICIAR A PARTIDA",
@@ -329,20 +387,61 @@ void Renderer::overlay(const Game& game) const {
     const double scale = std::min(2.8, (w - 20) / 132);
     rect(w * 0.06, h / 2 - 29 * scale, w * 0.88, 66 * scale, ink);
     const bool won = game.status() == Status::Won;
-    const std::string title = game.paused() ? "PAUSADO" : game.transitioning() ? "FASE " + std::to_string(game.stage()) + " CONCLUIDA" :
-        won ? "VOCE GANHOU!" : "VOCE PERDEU";
+    std::string title;
+    std::string detail;
+    std::string hint = "R REINICIA    ESC SAI";
+    if (game.paused()) {
+        title = "PAUSADO";
+        detail = "P PARA CONTINUAR";
+    } else if (game.transitioning()) {
+        title = "FASE " + std::to_string(game.stage()) + " CONCLUIDA";
+        const int nextStage = game.stage() + 1;
+        if (nextStage == Game::minibossStage) {
+            detail = "MINIBOSS NA FASE 5";
+        } else if (nextStage == Game::stageCount) {
+            detail = "BOSS FINAL NA FASE 10";
+        } else {
+            detail = "PREPARE-SE PARA A FASE " + std::to_string(nextStage);
+        }
+        const int secondsLeft = static_cast<int>(std::ceil(game.transitionRemaining()));
+        hint = "CONTINUA EM " + std::to_string(secondsLeft) + "...";
+    } else if (won) {
+        title = "VOCE GANHOU!";
+        detail = "10 FASES CONCLUIDAS - BOSS DERROTADO";
+    } else {
+        title = "VOCE PERDEU";
+        detail = game.lossReason() == LossReason::Shot ? "ATINGIDO POR UM TIRO" : "COLISAO COM UM BARRIL";
+    }
     const double titleScale = std::min(scale, w * 0.82 / (title.size() * 6));
     centered(title, w / 2, h / 2 + 14 * scale, titleScale, won || game.transitioning() ? green : white);
-    const std::string next = game.stage() + 1 == 5 ? "MINIBOSS NA FASE 5" : game.stage() + 1 == 10 ?
-        "BOSS FINAL NA FASE 10" : "PREPARE-SE PARA A FASE " + std::to_string(game.stage() + 1);
-    const std::string detail = game.paused() ? "P PARA CONTINUAR" : game.transitioning() ? next : won ?
-        "10 FASES CONCLUIDAS - BOSS DERROTADO" : game.lossReason() == LossReason::Shot ?
-        "ATINGIDO POR UM TIRO" : "COLISAO COM UM BARRIL";
     const double small = std::min(scale * 0.48, (w * 0.85) / (detail.size() * 6));
     centered(detail, w / 2, h / 2 - 2 * scale, small, muted);
-    const std::string hint = game.transitioning() && !game.paused() ? "CONTINUA EM " +
-        std::to_string(static_cast<int>(std::ceil(game.transitionRemaining()))) + "..." : "R REINICIA    ESC SAI";
     centered(hint, w / 2, h / 2 - 18 * scale, scale * 0.45, white);
+}
+
+void Renderer::bullet(const Bullet& shot) const {
+    if (shot.bossShot) {
+        disk(shot.position.x, shot.position.y, shot.radius + 1, ink);
+        disk(shot.position.x, shot.position.y, shot.radius, {1,0.20f,0.25f});
+        disk(shot.position.x, shot.position.y, shot.radius * 0.45, {1,0.84f,0.62f});
+    } else {
+        const Color tint = shot.owner == Owner::Player ? Color{1,0.90f,0.4f} : Color{1,0.40f,0.68f};
+        disk(shot.position.x, shot.position.y, shot.radius, tint);
+    }
+}
+
+void Renderer::hitboxes(const Game& game) const {
+    disk(game.player().position.x, game.player().position.y, game.player().radius, white, true);
+    for (const auto& barrel : game.barrels()) {
+        outlineRect(barrel.bounds(), white);
+    }
+    const Vec2 tip = game.player().muzzle();
+    const Vec2 end = tip + forward(game.player().angle + game.player().gunAngle) * 75;
+    color(white);
+    glBegin(GL_LINES);
+    glVertex2d(tip.x, tip.y);
+    glVertex2d(end.x, end.y);
+    glEnd();
 }
 
 void Renderer::draw(const Game& game) const {
@@ -360,26 +459,19 @@ void Renderer::draw(const Game& game) const {
     color(muted);
     glBegin(GL_LINES);
     for (int x = 0; x < c.arenaWidth; x += 20) {
-        glVertex2d(x, c.arenaHeight / 2.0); glVertex2d(std::min(x + 10, c.arenaWidth), c.arenaHeight / 2.0);
+        glVertex2d(x, c.arenaHeight / 2.0);
+        glVertex2d(std::min(x + 10, c.arenaWidth), c.arenaHeight / 2.0);
     }
     glEnd();
-    for (const auto& b : game.barrels()) barrel(b);
+    for (const auto& object : game.barrels()) {
+        barrel(object);
+    }
     character(game.player(), false);
-    for (const auto& b : game.bullets()) {
-        if (b.bossShot) {
-            disk(b.position.x, b.position.y, b.radius + 1, ink);
-            disk(b.position.x, b.position.y, b.radius, {1,0.20f,0.25f});
-            disk(b.position.x, b.position.y, b.radius * 0.45, {1,0.84f,0.62f});
-        } else {
-            disk(b.position.x, b.position.y, b.radius, b.owner == Owner::Player ? Color{1,0.90f,0.4f} : Color{1,0.40f,0.68f});
-        }
+    for (const auto& shot : game.bullets()) {
+        bullet(shot);
     }
     if (game.demo().hitboxes) {
-        disk(game.player().position.x, game.player().position.y, game.player().radius, white, true);
-        for (const auto& b : game.barrels()) outlineRect(b.bounds(), white);
-        color(white);
-        const Vec2 tip = game.player().muzzle(), end = tip + forward(game.player().angle + game.player().gunAngle) * 75;
-        glBegin(GL_LINES); glVertex2d(tip.x, tip.y); glVertex2d(end.x, end.y); glEnd();
+        hitboxes(game);
     }
     hud(game);
     overlay(game);

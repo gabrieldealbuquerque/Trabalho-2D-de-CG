@@ -14,75 +14,101 @@
 
 namespace cg {
 namespace {
-const tinyxml2::XMLElement& element(const tinyxml2::XMLElement& root, const char* name) {
+const tinyxml2::XMLElement& requiredElement(const tinyxml2::XMLElement& root, const char* name) {
     const auto* value = root.FirstChildElement(name);
-    if (!value) throw std::runtime_error(std::string("XML: elemento obrigatorio ausente: ") + name);
-    if (value->NextSiblingElement(name))
+    if (!value) {
+        throw std::runtime_error(std::string("XML: elemento obrigatorio ausente: ") + name);
+    }
+    if (value->NextSiblingElement(name)) {
         throw std::runtime_error(std::string("XML: elemento duplicado: ") + name);
+    }
     return *value;
 }
-double number(const tinyxml2::XMLElement& e, const char* name, double fallback, bool required = true) {
+
+double readNumber(const tinyxml2::XMLElement& e, const char* name) {
     const char* raw = e.Attribute(name);
-    if (!raw && !required) return fallback;
     if (raw) {
         char* end = nullptr;
         const double value = std::strtod(raw, &end);
-        if (end != raw && *end == '\0' && std::isfinite(value)) return value;
+        if (end != raw && *end == '\0' && std::isfinite(value)) {
+            return value;
+        }
     }
     throw std::runtime_error(std::string("XML: numero invalido ou ausente em ") + e.Name() + "." + name);
 }
-int integer(const tinyxml2::XMLElement& e, const char* name, int fallback) {
-    const double value = number(e, name, fallback);
-    if (std::floor(value) != value || value < 1 || value > 1000000)
+
+double readOptionalNumber(const tinyxml2::XMLElement& e, const char* name, double defaultValue) {
+    if (!e.Attribute(name)) {
+        return defaultValue;
+    }
+    return readNumber(e, name);
+}
+
+int readInteger(const tinyxml2::XMLElement& e, const char* name) {
+    const double value = readNumber(e, name);
+    if (std::floor(value) != value || value < 1 || value > 1000000) {
         throw std::runtime_error(std::string("XML: inteiro positivo esperado em ") + e.Name() + "." + name);
+    }
     return static_cast<int>(value);
 }
+
 void range(double value, double minimum, double maximum, const char* name) {
-    if (!std::isfinite(value) || value < minimum || value > maximum)
+    if (!std::isfinite(value) || value < minimum || value > maximum) {
         throw std::runtime_error(std::string("Configuracao fora do intervalo permitido: ") + name);
+    }
 }
 }
 
 Config Config::load(const std::filesystem::path& path) {
     tinyxml2::XMLDocument doc;
-    if (doc.LoadFile(path.string().c_str()) != tinyxml2::XML_SUCCESS)
+    if (doc.LoadFile(path.string().c_str()) != tinyxml2::XML_SUCCESS) {
         throw std::runtime_error("Nao foi possivel ler " + path.string() + ": " + doc.ErrorStr());
+    }
     const auto* root = doc.RootElement();
-    if (!root || std::string(root->Name()) != "jogo" || root->NextSiblingElement())
+    if (!root || std::string(root->Name()) != "jogo" || root->NextSiblingElement()) {
         throw std::runtime_error("XML: deve haver uma unica raiz <jogo>.");
-    const auto& arena = element(*root, "arena");
-    const auto& player = element(*root, "jogador");
-    const auto& enemy = element(*root, "inimigo");
-    const auto& barrel = element(*root, "barril");
-    Config c;
-    c.arenaWidth = integer(arena, "largura", c.arenaWidth);
-    c.arenaHeight = integer(arena, "altura", c.arenaHeight);
-    c.playerRadius = number(player, "raioCabeca", c.playerRadius);
-    c.playerSpeed = number(player, "velocidade", c.playerSpeed);
-    c.turnSpeed = number(player, "velocidadeGiro", c.turnSpeed, false);
-    c.enemyRadius = number(enemy, "raioCabeca", c.enemyRadius);
-    c.enemyShotsPerSecond = number(enemy, "tirosPorSegundo", c.enemyShotsPerSecond);
-    c.enemyShotSpeed = number(enemy, "velocidadeTiro", c.enemyShotSpeed);
-    c.playerShotSpeed = number(player, "velocidadeTiro", c.enemyShotSpeed, false);
-    c.playerShotsPerSecond = number(player, "tirosPorSegundo", c.playerShotsPerSecond, false);
-    c.barrelWidth = number(barrel, "largura", c.barrelWidth);
-    c.barrelHeight = number(barrel, "altura", c.barrelHeight);
-    c.barrelHitPoints = integer(barrel, "numeroTiros", c.barrelHitPoints);
-    c.barrelsToWin = integer(barrel, "nParaGanhar", c.barrelsToWin);
-    c.barrelSpeed = number(barrel, "velocidade", c.barrelSpeed);
+    }
+
+    const auto& arena = requiredElement(*root, "arena");
+    const auto& player = requiredElement(*root, "jogador");
+    const auto& enemy = requiredElement(*root, "inimigo");
+    const auto& barrel = requiredElement(*root, "barril");
+    Config config;
+
+    config.arenaWidth = readInteger(arena, "largura");
+    config.arenaHeight = readInteger(arena, "altura");
+    config.playerRadius = readNumber(player, "raioCabeca");
+    config.playerSpeed = readNumber(player, "velocidade");
+    config.turnSpeed = readOptionalNumber(player, "velocidadeGiro", config.turnSpeed);
+    config.enemyRadius = readNumber(enemy, "raioCabeca");
+    config.enemyShotsPerSecond = readNumber(enemy, "tirosPorSegundo");
+    config.enemyShotSpeed = readNumber(enemy, "velocidadeTiro");
+    config.playerShotSpeed = readOptionalNumber(player, "velocidadeTiro", config.enemyShotSpeed);
+    config.playerShotsPerSecond = readOptionalNumber(player, "tirosPorSegundo", config.playerShotsPerSecond);
+    config.barrelWidth = readNumber(barrel, "largura");
+    config.barrelHeight = readNumber(barrel, "altura");
+    config.barrelHitPoints = readInteger(barrel, "numeroTiros");
+    config.barrelsToWin = readInteger(barrel, "nParaGanhar");
+    config.barrelSpeed = readNumber(barrel, "velocidade");
+
     if (const auto* extra = root->FirstChildElement("outros")) {
-        c.spawnInterval = number(*extra, "intervaloBarris", c.spawnInterval, false);
-        c.mouseSensitivity = number(*extra, "sensibilidadeMouse", c.mouseSensitivity, false);
+        if (extra->NextSiblingElement("outros")) {
+            throw std::runtime_error("XML: elemento duplicado: outros");
+        }
+        config.spawnInterval = readOptionalNumber(*extra, "intervaloBarris", config.spawnInterval);
+        config.mouseSensitivity = readOptionalNumber(*extra, "sensibilidadeMouse", config.mouseSensitivity);
         if (extra->Attribute("semente")) {
-            const double seed = number(*extra, "semente", 0);
+            const double seed = readNumber(*extra, "semente");
             range(seed, 0, 4294967295.0, "outros.semente");
-            if (std::floor(seed) != seed) throw std::runtime_error("XML: semente deve ser inteira.");
-            c.seed = static_cast<std::uint32_t>(seed);
-            c.fixedSeed = true;
+            if (std::floor(seed) != seed) {
+                throw std::runtime_error("XML: semente deve ser inteira.");
+            }
+            config.seed = static_cast<std::uint32_t>(seed);
+            config.fixedSeed = true;
         }
     }
-    c.validate();
-    return c;
+    config.validate();
+    return config;
 }
 
 void Config::validate() const {

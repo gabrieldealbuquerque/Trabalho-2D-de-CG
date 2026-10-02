@@ -4,6 +4,14 @@
 #include <stdexcept>
 
 namespace cg {
+namespace {
+constexpr double clockTolerance = 1e-12;
+constexpr double barrelSpeedIncrease = 0.08;
+constexpr double spawnRateIncrease = 0.10;
+constexpr int extraBarrelsPerStage = 2;
+constexpr double minibossSpawnDelay = 5;
+}
+
 Game::Game(Config config)
     : config_(config), initialSeed_(config.fixedSeed ? config.seed : std::random_device{}()),
       random_(initialSeed_) {
@@ -17,46 +25,80 @@ void Game::reset() {
     status_ = Status::Playing;
     lossReason_ = LossReason::None;
     destroyed_ = 0;
-    paused_ = helpVisible_ = false;
-    accumulator_ = elapsed_ = 0;
+    paused_ = false;
+    helpVisible_ = false;
+    accumulator_ = 0;
+    elapsed_ = 0;
     startStage(1);
 }
 
 void Game::startStage(int stage) {
     stage_ = stage;
     stageDestroyed_ = 0;
-    transitionRemaining_ = spawnClock_ = 0;
+    transitionRemaining_ = 0;
+    spawnClock_ = 0;
     player_ = {{config_.arenaWidth / 2.0,
                 std::min(2.0 * config_.playerRadius, config_.arenaHeight / 2.0 - config_.playerRadius)},
                config_.playerRadius, 0, 0, 0};
     barrels_.clear();
     bullets_.clear();
     clearInput();
-    if (isBossStage()) spawnBoss();
-    else spawnBarrel();
+    if (isBossStage()) {
+        spawnBoss();
+    } else {
+        spawnBarrel();
+    }
 }
 
 void Game::completeStage() {
     barrels_.clear();
     bullets_.clear();
     clearInput();
-    if (stage_ == stageCount) finish(Status::Won);
-    else transitionRemaining_ = stageBreak;
+    if (stage_ == stageCount) {
+        finish(Status::Won);
+    } else {
+        transitionRemaining_ = stageBreak;
+    }
 }
 
 const Barrel* Game::boss() const {
-    const auto it = std::find_if(barrels_.begin(), barrels_.end(), [](const Barrel& b) { return b.isBoss(); });
-    return it == barrels_.end() ? nullptr : &*it;
+    for (const auto& barrel : barrels_) {
+        if (barrel.isBoss()) {
+            return &barrel;
+        }
+    }
+    return nullptr;
+}
+
+int Game::stageGoal() const {
+    if (isBossStage()) {
+        return 1;
+    }
+    return config_.barrelsToWin + extraBarrelsPerStage * (stage_ - 1);
+}
+
+double Game::barrelSpeed() const {
+    return config_.barrelSpeed * (1 + barrelSpeedIncrease * (stage_ - 1));
+}
+
+double Game::spawnInterval() const {
+    double interval = config_.spawnInterval;
+    if (stage_ == minibossStage) {
+        interval *= minibossSpawnDelay;
+    }
+    return interval / (1 + spawnRateIncrease * (stage_ - 1));
 }
 
 void Game::setKey(unsigned char key, bool pressed) {
     keys_[static_cast<unsigned char>(std::tolower(key))] = pressed;
 }
+
 void Game::clearInput() {
     keys_.fill(false);
     firing_ = false;
     shotCountdown_ = 0;
 }
+
 void Game::setFiring(bool pressed) {
     if (!pressed) {
         firing_ = false;
@@ -67,48 +109,67 @@ void Game::setFiring(bool pressed) {
         fire();
     }
 }
+
 void Game::updateFiring(double dt) {
     if (!firing_) return;
     shotCountdown_ -= dt;
-    while (shotCountdown_ <= 1e-12) {
+    while (shotCountdown_ <= clockTolerance) {
         fire();
         shotCountdown_ += 1 / config_.playerShotsPerSecond;
     }
 }
+
 void Game::aim(double horizontalDelta) {
-    if (active() && std::isfinite(horizontalDelta))
-        player_.gunAngle = std::clamp(player_.gunAngle - horizontalDelta * config_.mouseSensitivity,
-                                     -gunLimit, gunLimit);
+    if (!active() || !std::isfinite(horizontalDelta)) return;
+    const double newAngle = player_.gunAngle - horizontalDelta * config_.mouseSensitivity;
+    player_.gunAngle = std::clamp(newAngle, -gunLimit, gunLimit);
 }
+
+void Game::addBullet(Vec2 origin, double angle, double speed, double radius, Owner owner, bool bossShot) {
+    Bullet bullet;
+    bullet.position = origin;
+    bullet.velocity = forward(angle) * speed;
+    bullet.radius = radius;
+    bullet.owner = owner;
+    bullet.bossShot = bossShot;
+    bullets_.push_back(bullet);
+}
+
 void Game::fire() {
     if (!active()) return;
-    bullets_.push_back({player_.muzzle(), forward(player_.angle + player_.gunAngle) * config_.playerShotSpeed,
-                        std::max(1.0, player_.radius * 0.12), Owner::Player, true});
+    const double radius = std::max(1.0, player_.radius * 0.12);
+    addBullet(player_.muzzle(), player_.angle + player_.gunAngle, config_.playerShotSpeed, radius, Owner::Player);
 }
+
 void Game::togglePause() {
     if (status_ != Status::Playing) return;
     paused_ = !paused_;
     accumulator_ = 0;
     clearInput();
 }
+
 void Game::toggleHelp() {
     helpVisible_ = !helpVisible_;
     accumulator_ = 0;
     clearInput();
 }
+
 void Game::toggleDemo(int option) {
-    if (option == 2) demo_.barrelMotion = !demo_.barrelMotion;
-    if (option == 3) demo_.enemyFire = !demo_.enemyFire;
-    if (option == 4) demo_.spawning = !demo_.spawning;
-    if (option == 5) demo_.hitboxes = !demo_.hitboxes;
+    switch (option) {
+    case 2: demo_.barrelMotion = !demo_.barrelMotion; break;
+    case 3: demo_.enemyFire = !demo_.enemyFire; break;
+    case 4: demo_.spawning = !demo_.spawning; break;
+    case 5: demo_.hitboxes = !demo_.hitboxes; break;
+    }
 }
 
 void Game::advance(double seconds) {
-    if (!std::isfinite(seconds) || seconds < 0)
+    if (!std::isfinite(seconds) || seconds < 0) {
         throw std::invalid_argument("Tempo deve ser finito e nao negativo.");
+    }
     if (!running()) return;
     accumulator_ += seconds;
-    while (accumulator_ + 1e-12 >= timeStep && running()) {
+    while (accumulator_ + clockTolerance >= timeStep && running()) {
         accumulator_ -= timeStep;
         step(timeStep);
     }
@@ -116,27 +177,30 @@ void Game::advance(double seconds) {
 }
 
 void Game::movePlayer(double dt) {
-    const int turn = static_cast<int>(keys_['a']) - static_cast<int>(keys_['d']);
-    const int motion = static_cast<int>(keys_['w']) - static_cast<int>(keys_['s']);
-    const double oldAngle = radians(player_.angle);
-    const double omega = radians(turn * config_.turnSpeed);
-    const double velocity = motion * config_.playerSpeed;
+    const int turnDirection = keys_['a'] - keys_['d'];
+    const int walkDirection = keys_['w'] - keys_['s'];
+    const double previousAngle = radians(player_.angle);
+    const double angularSpeed = radians(turnDirection * config_.turnSpeed);
+    const double speed = walkDirection * config_.playerSpeed;
     Vec2 delta;
-    if (turn != 0) {
-        delta = {velocity / omega * (std::cos(oldAngle + omega * dt) - std::cos(oldAngle)),
-                 velocity / omega * (std::sin(oldAngle + omega * dt) - std::sin(oldAngle))};
+    if (turnDirection != 0) {
+        const double nextAngle = previousAngle + angularSpeed * dt;
+        const double turnRadius = speed / angularSpeed;
+        delta.x = turnRadius * (std::cos(nextAngle) - std::cos(previousAngle));
+        delta.y = turnRadius * (std::sin(nextAngle) - std::sin(previousAngle));
     } else {
-        delta = forward(player_.angle) * (velocity * dt);
+        delta = forward(player_.angle) * (speed * dt);
     }
-    player_.angle = wrapAngle(player_.angle + turn * config_.turnSpeed * dt);
+    player_.angle = wrapAngle(player_.angle + turnDirection * config_.turnSpeed * dt);
     const Vec2 before = player_.position;
     player_.position.x = std::clamp(before.x + delta.x, player_.radius, config_.arenaWidth - player_.radius);
     player_.position.y = std::clamp(before.y + delta.y, player_.radius, config_.arenaHeight / 2.0 - player_.radius);
     const double distance = length(player_.position - before);
-    if (distance > 1e-10)
-        player_.walkPhase = std::fmod(player_.walkPhase + motion * distance / player_.radius * 2.5, 2 * pi);
-    else
+    if (distance > 1e-10) {
+        player_.walkPhase = std::fmod(player_.walkPhase + walkDirection * distance / player_.radius * 2.5, 2 * pi);
+    } else {
         player_.walkPhase = 0;
+    }
 }
 
 void Game::spawnBarrel() {
@@ -146,19 +210,21 @@ void Game::spawnBarrel() {
     const double y = config_.arenaHeight - std::max(config_.barrelHeight / 2, enemy ? config_.enemyRadius : 0.0);
     Barrel barrel;
     barrel.position = {x, y};
-    barrel.hitPoints = barrel.maxHitPoints = config_.barrelHitPoints + (stage_ - 1) / 3;
+    barrel.maxHitPoints = config_.barrelHitPoints + (stage_ - 1) / 3;
     barrel.width = config_.barrelWidth;
     barrel.height = config_.barrelHeight;
     barrel.hasEnemy = enemy;
-    if (enemy && stage_ > 5) {
+    if (enemy && stage_ > minibossStage) {
         const int variant = std::uniform_int_distribution<int>(0, 3)(random_);
-        if (variant == 2) barrel.enemyKind = EnemyKind::SpreadGunner;
-        if (variant == 3) barrel.enemyKind = EnemyKind::Cannoneer;
-        const int armor = barrel.enemyKind == EnemyKind::Cannoneer ? 3 :
-                          barrel.enemyKind == EnemyKind::SpreadGunner ? 1 : 0;
-        barrel.maxHitPoints += armor;
-        barrel.hitPoints = barrel.maxHitPoints;
+        if (variant == 2) {
+            barrel.enemyKind = EnemyKind::SpreadGunner;
+            barrel.maxHitPoints += 1;
+        } else if (variant == 3) {
+            barrel.enemyKind = EnemyKind::Cannoneer;
+            barrel.maxHitPoints += 3;
+        }
     }
+    barrel.hitPoints = barrel.maxHitPoints;
     barrel.enemy = {barrel.position, config_.enemyRadius, 180, 0, 0};
     aimEnemy(barrel);
     barrels_.push_back(barrel);
@@ -171,7 +237,11 @@ void Game::spawnBoss() {
     barrel.width = std::min(config_.barrelWidth * (final ? 3.2 : 2.4), config_.arenaWidth * 0.70);
     barrel.height = std::min(config_.barrelHeight * (final ? 1.9 : 1.6), config_.arenaHeight * 0.18);
     barrel.position = {config_.arenaWidth / 2.0, config_.arenaHeight * 0.76};
-    barrel.hitPoints = barrel.maxHitPoints = final ? config_.barrelHitPoints * 10 : 150;
+    barrel.maxHitPoints = minibossHitPoints;
+    if (final) {
+        barrel.maxHitPoints = config_.barrelHitPoints * 10;
+    }
+    barrel.hitPoints = barrel.maxHitPoints;
     barrel.hasEnemy = true;
     const double radius = std::min({config_.enemyRadius * (final ? 1.8 : 1.4),
                                     barrel.width * 0.23, barrel.height * 0.28});
@@ -186,7 +256,8 @@ void Game::moveBarrel(Barrel& barrel, double dt) {
         const double amplitude = std::max(0.0, (config_.arenaWidth - barrel.width) / 2 - 4);
         const double speed = config_.barrelSpeed * (barrel.kind == BarrelKind::FinalBoss ? 1.6 : 1.2);
         barrel.motionClock += dt;
-        barrel.position.x = config_.arenaWidth / 2.0 + amplitude * std::sin(barrel.motionClock * speed / std::max(1.0, amplitude));
+        const double phase = barrel.motionClock * speed / std::max(1.0, amplitude);
+        barrel.position.x = config_.arenaWidth / 2.0 + amplitude * std::sin(phase);
         barrel.rollPhase = std::fmod(barrel.rollPhase + speed * dt / barrel.height, 1.0);
     } else {
         const double distance = barrelSpeed() * dt;
@@ -196,22 +267,30 @@ void Game::moveBarrel(Barrel& barrel, double dt) {
 }
 
 void Game::enemyFire(Barrel& barrel, double dt) {
-    if (barrel.isBoss()) { bossFire(barrel, dt); return; }
-    if (barrel.enemyKind != EnemyKind::Gunner) { specialEnemyFire(barrel, dt); return; }
+    if (barrel.isBoss()) {
+        bossFire(barrel, dt);
+        return;
+    }
+    if (barrel.enemyKind != EnemyKind::Gunner) {
+        specialEnemyFire(barrel, dt);
+        return;
+    }
     if (!demo_.enemyFire || config_.enemyShotsPerSecond <= 0) return;
     const double multiplier = 1 + 0.06 * (stage_ - 1);
     const double interval = 1 / (config_.enemyShotsPerSecond * multiplier);
     barrel.shotClock += dt;
-    while (barrel.shotClock + 1e-12 >= interval) {
+    while (barrel.shotClock + clockTolerance >= interval) {
         barrel.shotClock -= interval;
-        bullets_.push_back({barrel.enemy.muzzle(), forward(barrel.enemy.angle + barrel.enemy.gunAngle) * config_.enemyShotSpeed,
-                           std::max(1.0, barrel.enemy.radius * 0.12), Owner::Enemy, true});
+        const double angle = barrel.enemy.angle + barrel.enemy.gunAngle;
+        const double radius = std::max(1.0, barrel.enemy.radius * 0.12);
+        addBullet(barrel.enemy.muzzle(), angle, config_.enemyShotSpeed, radius, Owner::Enemy);
     }
 }
 
 void Game::specialEnemyFire(Barrel& barrel, double dt) {
     if (!demo_.enemyFire || config_.enemyShotsPerSecond <= 0) {
-        barrel.telegraph = barrel.shotClock = 0;
+        barrel.telegraph = 0;
+        barrel.shotClock = 0;
         return;
     }
     const bool spread = barrel.enemyKind == EnemyKind::SpreadGunner;
@@ -219,34 +298,53 @@ void Game::specialEnemyFire(Barrel& barrel, double dt) {
     const double interval = std::max(spread ? 0.9 : 1.5, 1 / (config_.enemyShotsPerSecond * multiplier));
     const double warning = 0.5;
     barrel.shotClock += dt;
-    while (barrel.shotClock + 1e-12 >= interval) {
+    while (barrel.shotClock + clockTolerance >= interval) {
         barrel.shotClock -= interval;
-        const double aimed = barrel.enemy.angle + barrel.enemy.gunAngle;
-        const int count = spread ? 3 : 8;
-        for (int i = 0; i < count; ++i) {
-            const double angle = spread ? aimed + (i - 1) * 14 : i * 360.0 / count + barrel.attackIndex * 22.5;
-            const Vec2 direction = forward(angle);
-            const Vec2 origin = spread ? barrel.enemy.muzzle() :
-                barrel.position + Vec2{direction.x * barrel.width * 0.40, direction.y * barrel.height * 0.40};
-            bullets_.push_back({origin, direction * (config_.enemyShotSpeed * (spread ? 1.1 : 0.8)),
-                               std::clamp(barrel.enemy.radius * (spread ? 0.15 : 0.24), 2.0, 5.0), Owner::Enemy, true});
-        }
+        specialEnemyAttack(barrel);
         ++barrel.attackIndex;
     }
     barrel.telegraph = std::clamp((barrel.shotClock - interval + warning) / warning, 0.0, 1.0);
 }
 
+void Game::specialEnemyAttack(Barrel& barrel) {
+    if (barrel.enemyKind == EnemyKind::SpreadGunner) {
+        const Vec2 origin = barrel.enemy.muzzle();
+        const double aimed = barrel.enemy.angle + barrel.enemy.gunAngle;
+        const double radius = std::clamp(barrel.enemy.radius * 0.15, 2.0, 5.0);
+        for (int shot = -1; shot <= 1; ++shot) {
+            addBullet(origin, aimed + shot * 14, config_.enemyShotSpeed * 1.1, radius, Owner::Enemy);
+        }
+        return;
+    }
+
+    const int shotCount = 8;
+    const double radius = std::clamp(barrel.enemy.radius * 0.24, 2.0, 5.0);
+    for (int shot = 0; shot < shotCount; ++shot) {
+        const double angle = shot * 360.0 / shotCount + barrel.attackIndex * 22.5;
+        const Vec2 direction = forward(angle);
+        const Vec2 origin = barrel.position + Vec2{direction.x * barrel.width * 0.40,
+                                                  direction.y * barrel.height * 0.40};
+        addBullet(origin, angle, config_.enemyShotSpeed * 0.8, radius, Owner::Enemy);
+    }
+}
+
 void Game::bossFire(Barrel& barrel, double dt) {
     if (!demo_.enemyFire || config_.enemyShotsPerSecond <= 0) {
-        barrel.telegraph = barrel.shotClock = 0;
+        barrel.telegraph = 0;
+        barrel.shotClock = 0;
         return;
     }
     const bool miniboss = barrel.kind == BarrelKind::Miniboss;
-    const double multiplier = miniboss ? 1.30 : barrel.enraged() ? 1.1 : 0.85;
+    double multiplier = 0.85;
+    if (miniboss) {
+        multiplier = 1.30;
+    } else if (barrel.enraged()) {
+        multiplier = 1.1;
+    }
     const double interval = std::max(miniboss ? 0.6 : 1.2, 1 / (config_.enemyShotsPerSecond * multiplier));
     const double warning = std::min(0.7, interval * 0.45);
     barrel.shotClock += dt;
-    while (barrel.shotClock + 1e-12 >= interval) {
+    while (barrel.shotClock + clockTolerance >= interval) {
         barrel.shotClock -= interval;
         bossAttack(barrel);
         ++barrel.attackIndex;
@@ -257,43 +355,59 @@ void Game::bossFire(Barrel& barrel, double dt) {
 void Game::bossAttack(Barrel& barrel) {
     const bool final = barrel.kind == BarrelKind::FinalBoss;
     const bool enraged = barrel.enraged();
-    const double speed = config_.enemyShotSpeed * (!final ? 1.15 : enraged ? 1.1 : 0.85);
+    double speedMultiplier = 0.85;
+    if (!final) {
+        speedMultiplier = 1.15;
+    } else if (enraged) {
+        speedMultiplier = 1.1;
+    }
+    const double speed = config_.enemyShotSpeed * speedMultiplier;
     const double radius = std::clamp(config_.playerRadius * 0.22, 2.0, 5.0);
-    const auto emit = [&](Vec2 origin, double angle, double velocity) {
-        bullets_.push_back({origin, forward(angle) * velocity, radius, Owner::Enemy, true, true});
-    };
-    const auto aimed = [&](Vec2 origin) {
-        const Vec2 delta = player_.position - origin;
-        return std::atan2(-delta.x, delta.y) * 180 / pi;
-    };
     if (barrel.attackPattern() == 0) {
         const Vec2 origin = barrel.bossMuzzle(0);
-        const int count = !final ? 3 : enraged ? 7 : 5;
-        const double spread = !final ? 18 : enraged ? 32 : 26;
-        for (int i = 0; i < count; ++i)
-            emit(origin, aimed(origin) - spread + 2 * spread * i / (count - 1), speed);
+        int count = 5;
+        double spread = 26;
+        if (!final) {
+            count = 3;
+            spread = 18;
+        } else if (enraged) {
+            count = 7;
+            spread = 32;
+        }
+        const double aimed = angleTo(origin, player_.position);
+        for (int shot = 0; shot < count; ++shot) {
+            const double angle = aimed - spread + 2 * spread * shot / (count - 1);
+            addBullet(origin, angle, speed, radius, Owner::Enemy, true);
+        }
     } else if (barrel.attackPattern() == 1) {
-        const int count = !final ? 12 : enraged ? 22 : 18;
+        int count = 18;
+        if (!final) {
+            count = 12;
+        } else if (enraged) {
+            count = 22;
+        }
         const double gap = 180 + 45 * std::sin(barrel.attackIndex * 1.1);
         for (int i = 0; i < count; ++i) {
             const double angle = 360.0 * i / count + barrel.attackIndex * 11;
             if (std::abs(wrapAngle(angle - gap)) < 30) continue;
             const Vec2 origin = barrel.position + forward(angle) * (std::min(barrel.width, barrel.height) * 0.4);
-            emit(origin, angle, speed * 0.82);
+            addBullet(origin, angle, speed * 0.82, radius, Owner::Enemy, true);
         }
     } else {
         const int count = enraged ? 5 : 4;
         for (double side : {-1.0, 1.0}) {
             const Vec2 origin = barrel.bossMuzzle(side);
-            for (int i = 0; i < count; ++i)
-                emit(origin, aimed(origin) + side * (i * 11 - 16), speed * (0.85 + 0.05 * i));
+            const double aimed = angleTo(origin, player_.position);
+            for (int shot = 0; shot < count; ++shot) {
+                const double angle = aimed + side * (shot * 11 - 16);
+                addBullet(origin, angle, speed * (0.85 + 0.05 * shot), radius, Owner::Enemy, true);
+            }
         }
     }
 }
 
 void Game::aimEnemy(Barrel& barrel) {
-    const Vec2 offset = player_.position - barrel.enemy.gunPivot();
-    const double desired = std::atan2(-offset.x, offset.y) * 180 / pi;
+    const double desired = angleTo(barrel.enemy.gunPivot(), player_.position);
     barrel.enemy.gunAngle = std::clamp(wrapAngle(desired - barrel.enemy.angle), -gunLimit, gunLimit);
 }
 
@@ -303,23 +417,17 @@ void Game::finish(Status status, LossReason reason) {
     clearInput();
 }
 
-void Game::step(double dt) {
-    elapsed_ += dt;
-    if (transitioning()) {
-        transitionRemaining_ = std::max(0.0, transitionRemaining_ - dt);
-        if (transitionRemaining_ < 1e-10) startStage(stage_ + 1);
-        return;
+void Game::updateSpawning(double dt) {
+    if (!demo_.spawning) return;
+    const double interval = spawnInterval();
+    spawnClock_ += dt;
+    while (spawnClock_ + clockTolerance >= interval) {
+        spawnClock_ -= interval;
+        spawnBarrel();
     }
-    if (demo_.spawning) {
-        spawnClock_ += dt;
-        while (spawnClock_ + 1e-12 >= spawnInterval()) {
-            spawnClock_ -= spawnInterval();
-            spawnBarrel();
-        }
-    }
-    const Vec2 previousPlayer = player_.position;
-    movePlayer(dt);
-    updateFiring(dt);
+}
+
+std::vector<Vec2> Game::updateBarrels(double dt) {
     std::vector<Vec2> previousBarrels;
     previousBarrels.reserve(barrels_.size());
     for (auto& barrel : barrels_) {
@@ -332,70 +440,131 @@ void Game::step(double dt) {
             enemyFire(barrel, dt);
         }
     }
+    return previousBarrels;
+}
 
-    enum class Impact { BarrelShot, EnemyShot, Body };
-    struct Event { double time; Impact type; std::size_t bullet, barrel; };
-    std::vector<Event> events;
+std::vector<Game::Collision> Game::findCollisions(double dt, Vec2 previousPlayer,
+                                                 const std::vector<Vec2>& previousBarrels) {
+    std::vector<Collision> collisions;
     for (std::size_t i = 0; i < bullets_.size(); ++i) {
         auto& bullet = bullets_[i];
         const Vec2 before = bullet.position;
         bullet.position = before + bullet.velocity * dt;
         if (bullet.owner == Owner::Player) {
             for (std::size_t j = 0; j < barrels_.size(); ++j) {
-                const double t = sweepCircleRect(before - previousBarrels[j], bullet.position - barrels_[j].position,
-                    bullet.radius, {{0, 0}, barrels_[j].width, barrels_[j].height});
-                if (std::isfinite(t)) events.push_back({t, Impact::BarrelShot, i, j});
+                const auto& barrel = barrels_[j];
+                const Vec2 relativeStart = before - previousBarrels[j];
+                const Vec2 relativeEnd = bullet.position - barrel.position;
+                const Rect bounds{{0, 0}, barrel.width, barrel.height};
+                const double hitTime = sweepCircleRect(relativeStart, relativeEnd, bullet.radius, bounds);
+                if (std::isfinite(hitTime)) {
+                    collisions.push_back({hitTime, CollisionType::PlayerShot, i, j});
+                }
             }
         } else {
-            const double t = segmentCircle(before - previousPlayer, bullet.position - player_.position,
-                                          {0, 0}, bullet.radius + player_.radius);
-            if (std::isfinite(t)) events.push_back({t, Impact::EnemyShot, i, 0});
-        }
-    }
-    for (std::size_t j = 0; j < barrels_.size(); ++j) {
-        const double t = sweepCircleRect(previousPlayer - previousBarrels[j], player_.position - barrels_[j].position,
-            player_.radius, {{0, 0}, barrels_[j].width, barrels_[j].height});
-        if (std::isfinite(t)) events.push_back({t, Impact::Body, 0, j});
-    }
-    std::stable_sort(events.begin(), events.end(), [](const Event& a, const Event& b) {
-        if (a.time != b.time) return a.time < b.time;
-        return a.type < b.type;
-    });
-    for (const auto& event : events) {
-        if (status_ != Status::Playing) break;
-        if (event.type == Impact::BarrelShot) {
-            auto& barrel = barrels_[event.barrel];
-            auto& bullet = bullets_[event.bullet];
-            if (!bullet.alive || barrel.hitPoints <= 0) continue;
-            bullet.alive = false;
-            if (--barrel.hitPoints == 0) {
-                ++destroyed_;
-                if (barrel.isBoss()) {
-                    ++stageDestroyed_;
-                    completeStage();
-                    return;
-                }
-                if (barrel.kind == BarrelKind::Normal && !isBossStage()) ++stageDestroyed_;
-                if (!isBossStage() && stageDestroyed_ >= stageGoal()) {
-                    completeStage();
-                    return;
-                }
+            const double hitTime = segmentCircle(before - previousPlayer, bullet.position - player_.position,
+                                                {0, 0}, bullet.radius + player_.radius);
+            if (std::isfinite(hitTime)) {
+                collisions.push_back({hitTime, CollisionType::EnemyShot, i, 0});
             }
-        } else if (event.type == Impact::EnemyShot) {
-            if (!bullets_[event.bullet].alive) continue;
-            bullets_[event.bullet].alive = false;
-            finish(Status::Lost, LossReason::Shot);
-        } else if (barrels_[event.barrel].hitPoints > 0) {
-            finish(Status::Lost, LossReason::Barrel);
         }
     }
-    barrels_.erase(std::remove_if(barrels_.begin(), barrels_.end(), [](const Barrel& b) {
-        const double bottom = b.hasEnemy ? b.enemy.radius : -b.height / 2;
-        return b.hitPoints <= 0 || (!b.isBoss() && b.position.y < bottom);
+
+    for (std::size_t j = 0; j < barrels_.size(); ++j) {
+        const auto& barrel = barrels_[j];
+        const Rect bounds{{0, 0}, barrel.width, barrel.height};
+        const double hitTime = sweepCircleRect(previousPlayer - previousBarrels[j],
+                                              player_.position - barrel.position, player_.radius, bounds);
+        if (std::isfinite(hitTime)) {
+            collisions.push_back({hitTime, CollisionType::Contact, 0, j});
+        }
+    }
+
+    std::stable_sort(collisions.begin(), collisions.end(), [](const Collision& first, const Collision& second) {
+        if (first.time != second.time) {
+            return first.time < second.time;
+        }
+        return first.type < second.type;
+    });
+    return collisions;
+}
+
+bool Game::applyCollisions(const std::vector<Collision>& collisions) {
+    for (const auto& collision : collisions) {
+        if (status_ != Status::Playing) break;
+
+        if (collision.type == CollisionType::Contact) {
+            if (barrels_[collision.barrelIndex].hitPoints > 0) {
+                finish(Status::Lost, LossReason::Barrel);
+            }
+            continue;
+        }
+
+        auto& bullet = bullets_[collision.bulletIndex];
+        if (!bullet.alive) continue;
+        if (collision.type == CollisionType::EnemyShot) {
+            bullet.alive = false;
+            finish(Status::Lost, LossReason::Shot);
+            continue;
+        }
+
+        auto& barrel = barrels_[collision.barrelIndex];
+        if (barrel.hitPoints <= 0) continue;
+        bullet.alive = false;
+        --barrel.hitPoints;
+        if (barrel.hitPoints > 0) continue;
+
+        ++destroyed_;
+        if (barrel.isBoss()) {
+            ++stageDestroyed_;
+            completeStage();
+            return true;
+        }
+        if (!isBossStage()) {
+            ++stageDestroyed_;
+            if (stageDestroyed_ >= stageGoal()) {
+                completeStage();
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void Game::removeFinishedObjects() {
+    barrels_.erase(std::remove_if(barrels_.begin(), barrels_.end(), [](const Barrel& barrel) {
+        const double exitHeight = barrel.hasEnemy ? barrel.enemy.radius : -barrel.height / 2;
+        const bool escaped = !barrel.isBoss() && barrel.position.y < exitHeight;
+        return barrel.hitPoints <= 0 || escaped;
     }), barrels_.end());
-    bullets_.erase(std::remove_if(bullets_.begin(), bullets_.end(), [this](const Bullet& b) {
-        return !b.alive || b.position.x < -b.radius || b.position.x > config_.arenaWidth + b.radius ||
-               b.position.y < -b.radius || b.position.y > config_.arenaHeight + b.radius;
+
+    bullets_.erase(std::remove_if(bullets_.begin(), bullets_.end(), [this](const Bullet& bullet) {
+        const bool outsideX = bullet.position.x < -bullet.radius ||
+                              bullet.position.x > config_.arenaWidth + bullet.radius;
+        const bool outsideY = bullet.position.y < -bullet.radius ||
+                              bullet.position.y > config_.arenaHeight + bullet.radius;
+        return !bullet.alive || outsideX || outsideY;
     }), bullets_.end());
+}
+
+void Game::step(double dt) {
+    elapsed_ += dt;
+    if (transitioning()) {
+        transitionRemaining_ = std::max(0.0, transitionRemaining_ - dt);
+        if (transitionRemaining_ < 1e-10) {
+            startStage(stage_ + 1);
+        }
+        return;
+    }
+
+    updateSpawning(dt);
+    const Vec2 previousPlayer = player_.position;
+    movePlayer(dt);
+    updateFiring(dt);
+
+    const auto previousBarrels = updateBarrels(dt);
+    const auto collisions = findCollisions(dt, previousPlayer, previousBarrels);
+    if (applyCollisions(collisions)) return;
+    removeFinishedObjects();
 }
 }
