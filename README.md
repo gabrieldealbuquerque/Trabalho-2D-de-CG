@@ -2,6 +2,20 @@
 
 Jogo em C++17, OpenGL **1.0** e FreeGLUT, implementado a partir do PDF desta pasta e ampliado com uma campanha de **10 fases**, miniboss na fase 5 e boss final na fase 10. A arena ocupa a janela inteira e tem fundo liso. O jogador destrói barris e chefes, evitando contato e tiros inimigos.
 
+**Navegação:** [Execução](#compilar-e-executar) · [Controles](#controles) · [Configuração](#configuração) · [Campanha](#campanha-e-chefes) · [Testes](#testes) · [Organização](#organização)
+
+## Visão geral
+
+| Área | Implementação |
+| --- | --- |
+| Linguagem e janela | C++17, OpenGL 1.0 e FreeGLUT |
+| Interação | Movimento pelo teclado, mira pelo mouse e disparos |
+| Simulação | Barris, projéteis, colisões e estados de jogo |
+| Progressão | Campanha com dez fases e dois chefes |
+| Configuração | XML lido com TinyXML2 incluído no repositório |
+
+O [enunciado da disciplina](26-09-24%20CG%202020-2%20-%20T2D.pdf) registra os requisitos e as regras de avaliação. A documentação de apoio e as fontes dos testes permanecem disponíveis em [docs/](docs) e [tests/](tests).
+
 ## Compilar e executar
 
 Na raiz, o script `make.sh` executa o Makefile e detecta o ambiente temporário desta sessão quando necessário:
@@ -33,6 +47,7 @@ O TinyXML2 10.0.0 está incluído em código-fonte, com licença, em `third_part
 
 ```sh
 make clean                    # Remove executável, objetos e resultados de testes
+make all                      # Recompila antes das verificações abaixo
 ./trabalhocg --verificar-config
 ./trabalhocg --ajuda
 ```
